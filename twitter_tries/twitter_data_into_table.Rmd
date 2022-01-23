@@ -172,7 +172,7 @@ for (i in (1:length(profile_pic_url))) {
 }
 ```
 
-this kind of works but the picture is tiny and the quality is awful. will do this manually... :-/
+this kind of works but the picture is tiny and the quality is awful. will do this manually... and save as png
 
 
 # format the table nicely
@@ -206,7 +206,7 @@ r <- reactable(subset,
             image_twitter = colDef(name = "", 
                           width = 60,
                           cell = function(value) {
-                               img_src <- knitr::image_uri(sprintf("images/%s.png", value))
+                               img_src <- knitr::image_uri(sprintf("images/%s.png", value)) # .png for the manual download, .jpg for automatic
                                image <- img(src = img_src, height = "28px", alt = "")
                                tagList(
                                  div(style = list(display = "inline-block", width = "45px"), image),
