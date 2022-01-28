@@ -54,7 +54,6 @@ json_data <- fromJSON(obj, flatten = TRUE) %>% as.data.frame
 my_chars <- get_characteristics("SaraHaenzi", headers)
 ```
 
-
 ## get recent tweets
 the standard developer account does not allow to retrieve all tweets, but only the most recent ones (last 7 days)
 
@@ -78,10 +77,9 @@ test it
 my_recent <- get_recent_tweets("SaraHaenzi", headers)
 ```
 
-## get users who like a tweet
-
+## get number of likes
 ```{r}
-get_likes <- function(ids_list, headers){
+get_n_likes <- function(ids_list, headers){
   ids_one_string <- paste(ids_list, collapse = ",")
   url_handle <- sprintf("https://api.twitter.com/2/tweets?ids=%s&tweet.fields=public_metrics", ids_one_string)
   response <-
@@ -95,72 +93,45 @@ get_likes <- function(ids_list, headers){
 
 test it
 ```{r}
-my_likes <- get_likes(my_recent$data.id, headers)
+my_likes <- get_n_likes(my_recent$data.id, headers)
 ```
 
-
 # Retrieve data from twitter
-
-## preparation
+tidier way: mutate and purrr, no loop required!
 ```{r}
 handles <- c("SWRdata", "BR_data", "SPIEGEL_Data", "SRFdata", "NZZvisuals")
 country <- c("DE", "DE", "DE", "CH", "CH")
-description <- vector("list", length(handles))
-profile_pic_url <- vector("list", length(handles))
-since <- vector("list", length(handles))
-n_followers <- vector("list", length(handles))
-n_tweets_total <- (vector("list", length(handles)))
-n_tweets_recent <- vector("list", length(handles))
-n_likes <- vector("list", length(handles))
-tweets_recent <- vector("list", length(handles))
+user_characteristics <- tibble(handles, country) %>%
+  mutate(data_user = purrr::map(.x=handles, .f=get_characteristics, headers=headers)) %>%
+  tidyr::unnest(cols = c(data_user))
+tweets <- tibble(handles) %>%
+  mutate(data_recent_tweets = purrr::map(.x=handles, .f=get_recent_tweets, headers=headers)) %>%
+  tidyr::unnest(cols = c(data_recent_tweets)) %>%
+  mutate(likes = purrr::map(.x=data.id, .f=get_n_likes, headers = headers))
 ```
 
-## get the data
+rename columns
 ```{r}
-for (i in 1:length(handles)){
-  handle <- handles[i]
-  
-  temp_data <- get_characteristics(handle, headers)
-  
-  # description
-  description[[i]] <- temp_data[1, "data.description"]
-  
-  # profile pic url
-  profile_pic_url[[i]] <- temp_data[1, "data.profile_image_url"]
-  
-  # on twitter since
-  since[[i]] <- temp_data[1, "data.created_at"]
-  
-  # followers
-  n_followers[[i]] <- temp_data[1, "data.public_metrics.followers_count"]
-  
-  # total number of tweets
-  n_tweets_total[[i]] <- temp_data[1, "data.public_metrics.tweet_count"]
-  
-  # recent tweets
-  r <- get_recent_tweets(handle, headers)
-  tweets_recent[[i]] <- r
-  if ("data.id" %in% names(r)){
-    n_tweets_recent[[i]] <- nrow(r)
-  }
-  else { # no tweets
-    n_tweets_recent[[i]] <- 0
-  }
-  
-  # likes - for each of the recent tweets, then sum
-  likes <- get_likes(r$data.id, headers)
-  n_likes[[i]] <- likes
-}
+user_characteristics <- user_characteristics %>%
+  rename_all(~stringr::str_replace(.,"^data.","")) %>% # remove data. at the beginning of column names
+  rename_all(~stringr::str_replace(., "^public_metrics.", "")) %>% # remove public_metrics.
+  mutate(since = strtoi(stringr::str_sub(created_at, 1,4)))
 ```
 
-put it in a tibble
+summarise tweet data into number of tweets and number of likes
 ```{r}
-overview <- tibble(name = handles, country = country, description = description, picture_url = profile_pic_url, since = since, followers = n_followers, tweets = n_tweets_total, recent_tweets=n_tweets_recent, recent_likes = n_likes) %>%
-  mutate(since = strtoi(stringr::str_sub(since, 1,4))) %>%
-  tidyr::unnest(cols = c(followers, tweets, recent_tweets, recent_likes))
+tweet_summary <- tweets %>%
+  tidyr::unnest(cols = c(likes)) %>%
+  group_by(handles) %>%
+  summarise(recent_tweets = n(),
+            recent_likes = sum(likes))
+```
 
-subset <- overview %>%
-  select(-picture_url, -description)
+select a subset of the user characteristics and join with the tweet summary
+```{r}
+subset <- user_characteristics %>%
+  select(name = handles, country, since, followers = followers_count, tweets = tweet_count) %>%
+  full_join(tweet_summary, by = c(name = "handles"))
 ```
 
 download all the profile pictures
@@ -174,10 +145,9 @@ for (i in (1:length(profile_pic_url))) {
 
 this kind of works but the picture is tiny and the quality is awful. will do this manually... and save as png
 
-
 # format the table nicely
 
-very helpful [demo page](https://glin.github.io/reactable/articles/cookbook/cookbook.html) for reactable
+very helpful [demo page for reactable](https://glin.github.io/reactable/articles/cookbook/cookbook.html)
 
 ```{r}
 # Render a bar chart with a label on the left
@@ -195,7 +165,7 @@ subset <- subset %>%
   relocate(image_twitter, .before = name)
 ```
 
-
+make table
 ```{r}
 my_font <- "corbel"
 r <- reactable(subset,
