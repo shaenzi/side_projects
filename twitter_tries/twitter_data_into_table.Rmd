@@ -21,6 +21,7 @@ require(jsonlite)
 require(dplyr)
 require(htmltools)
 require(reactable)
+library(htmlwidgets)
 ```
 
 # set up access
@@ -96,8 +97,68 @@ test it
 my_likes <- get_n_likes(my_recent$data.id, headers)
 ```
 
-# Retrieve data from twitter
-tidier way: mutate and purrr, no loop required!
+## get retweets
+```{r}
+get_n_retweets <- function(id, headers){
+  url_handle <- sprintf("https://api.twitter.com/1.1/statuses/retweeters/:%s.json", id)
+  response <- 
+    httr::GET(url_handle,
+            httr::add_headers(.headers = headers))
+  obj <- httr::content(response, as = "text")
+  json_data <- fromJSON(obj, flatten = TRUE) %>% as.data.frame
+}
+```
+
+test it
+```{r}
+retweets <- get_n_retweets(my_recent$data.id[[1]], headers)
+```
+with my current account I do not have access to this endpoint :-/ therefore cannot include retweets
+
+## further data munging functions
+
+```{r}
+clean_column_names <- function(user_characteristics){
+  user_characteristics %>%
+  rename_all(~stringr::str_replace(.,"^data.","")) %>% # remove data. at the beginning of column names
+  rename_all(~stringr::str_replace(., "^public_metrics.", "")) %>% # remove public_metrics.
+  mutate(since = strtoi(stringr::str_sub(created_at, 1,4)))
+}
+```
+
+```{r}
+summarise_tweets <- function(tweets){
+  tweets %>%
+  tidyr::unnest(cols = c(likes)) %>%
+  group_by(handles) %>%
+  summarise(recent_tweets = n(),
+            recent_likes = sum(likes))
+}
+```
+
+```{r}
+download_profile_pics <- function(user_characteristics){
+  for (i in (1:nrow(user_characteristics))) {
+  url <- user_characteristics$profile_image_url[[i]]
+  name <- user_characteristics$handles[[i]]
+  download.file(url ,destfile=sprintf("images/%s.jpg", name))
+}
+}
+```
+
+## bar chart function for table
+
+```{r}
+# Render a bar chart with a label on the left
+bar_chart <- function(label, width = "100%", height = "14px", fill = "#00bfc4", background = NULL) {
+  bar <- div(style = list(background = fill, width = width, height = height))
+  chart <- div(style = list(flexGrow = 1, marginLeft = "6px", background = background), bar)
+  div(style = list(display = "flex", alignItems = "center"), label, chart)
+}
+```
+
+# Retrieve data from twitter round 1: different data visualisation accounts
+
 ```{r}
 handles <- c("SWRdata", "BR_data", "SPIEGEL_Data", "SRFdata", "NZZvisuals")
 country <- c("DE", "DE", "DE", "CH", "CH")
@@ -110,21 +171,12 @@ tweets <- tibble(handles) %>%
   mutate(likes = purrr::map(.x=data.id, .f=get_n_likes, headers = headers))
 ```
 
-rename columns
 ```{r}
-user_characteristics <- user_characteristics %>%
-  rename_all(~stringr::str_replace(.,"^data.","")) %>% # remove data. at the beginning of column names
-  rename_all(~stringr::str_replace(., "^public_metrics.", "")) %>% # remove public_metrics.
-  mutate(since = strtoi(stringr::str_sub(created_at, 1,4)))
-```
+# rename columns
+user_characteristics <- clean_column_names(user_characteristics) 
 
-summarise tweet data into number of tweets and number of likes
-```{r}
-tweet_summary <- tweets %>%
-  tidyr::unnest(cols = c(likes)) %>%
-  group_by(handles) %>%
-  summarise(recent_tweets = n(),
-            recent_likes = sum(likes))
+# summarise tweets
+tweet_summary <- summarise_tweets(tweets)
 ```
 
 select a subset of the user characteristics and join with the tweet summary
@@ -135,12 +187,8 @@ subset <- user_characteristics %>%
 ```
 
 download all the profile pictures
-```{r, eval=FALSE}
-for (i in (1:length(profile_pic_url))) {
-  url <- profile_pic_url[[i]]
-  name <- handles[[i]]
-  download.file(url ,destfile=sprintf("images/%s.png", name))
-}
+```{r}
+download_profile_pics(user_characteristics)
 ```
 
 this kind of works but the picture is tiny and the quality is awful. will do this manually... and save as png
@@ -148,15 +196,6 @@ this kind of works but the picture is tiny and the quality is awful. will do thi
 # format the table nicely
 
 very helpful [demo page for reactable](https://glin.github.io/reactable/articles/cookbook/cookbook.html)
-
-```{r}
-# Render a bar chart with a label on the left
-bar_chart <- function(label, width = "100%", height = "14px", fill = "#00bfc4", background = NULL) {
-  bar <- div(style = list(background = fill, width = width, height = height))
-  chart <- div(style = list(flexGrow = 1, marginLeft = "6px", background = background), bar)
-  div(style = list(display = "flex", alignItems = "center"), label, chart)
-}
-```
 
 duplicate name column for image
 ```{r}
@@ -240,10 +279,115 @@ r
 
 and save as html
 ```{r}
-library("htmlwidgets")
-
 html_file <- "table.html"
-
 saveWidget(widget = r, file = html_file, selfcontained = TRUE)
 ```
 
+# get data round 2: srf accounts
+```{r}
+handles_srf <- c("SRF", "SRFnews", "SRFdata", "srfmeteo", "SRGSSR", "srfkonsum")
+user_characteristics_srf <- tibble(handles_srf) %>%
+  rename(handles = handles_srf) %>%
+  mutate(data_user = purrr::map(.x=handles, .f=get_characteristics, headers=headers)) %>%
+  tidyr::unnest(cols = c(data_user))
+tweets_srf <- tibble(handles_srf) %>%
+  rename(handles = handles_srf) %>%
+  mutate(data_recent_tweets = purrr::map(.x=handles, .f=get_recent_tweets, headers=headers)) %>%
+  tidyr::unnest(cols = c(data_recent_tweets)) %>%
+  mutate(likes = purrr::map(.x=data.id, .f=get_n_likes, headers = headers))
+```
+
+```{r}
+# rename columns
+user_characteristics_srf <- clean_column_names(user_characteristics_srf) 
+
+# summarise tweets
+tweet_summary_srf <- summarise_tweets(tweets_srf)
+```
+
+
+select a subset of the user characteristics and join with the tweet summary
+```{r}
+subset_srf <- user_characteristics_srf %>%
+  select(name = handles, since, followers = followers_count, tweets = tweet_count) %>%
+  full_join(tweet_summary_srf, by = c(name = "handles"))
+```
+
+download all the profile pictures
+```{r}
+download_profile_pics(user_characteristics_srf)
+```
+
+duplicate name column for image
+```{r}
+subset_srf <- subset_srf %>%
+  mutate(image_twitter = name) %>%
+  relocate(image_twitter, .before = name)
+```
+
+```{r}
+my_font <- "corbel"
+r_srf <- reactable(subset_srf,
+          defaultSorted = "since", defaultSortOrder = "desc",
+          columns = list(
+            image_twitter = colDef(name = "", 
+                          width = 60,
+                          cell = function(value) {
+                               img_src <- knitr::image_uri(sprintf("images/%s.jpg", value)) # .png for the manual download, .jpg for automatic
+                               image <- img(src = img_src, height = "28px", alt = "")
+                               tagList(
+                                 div(style = list(display = "inline-block", width = "45px"), image),
+                                 )
+                               }),
+            name = colDef(name = "Twitter-Konto", 
+                          format = colFormat(prefix = "@"),
+                          width = 150,
+                          style = list(fontFamily = my_font)),
+            since = colDef(name = "dabei seit",
+                           align = "center",
+                           style = list(fontFamily = my_font)),
+            followers = colDef(name = "Follower",
+                               cell = function(value){
+                                 width <- paste0(value*100 / max(subset$followers), "%")
+                                 value <- format(value, width = 7, justify = "right")
+                                 bar_chart(value, width=width, fill = "#AF001D", background = "#e1e1e1")
+                               },
+                               align = "left",
+                               width = 180,
+                               style = list(fontFamily = "monospace", whiteSpace = "pre")),
+            tweets = colDef(name = "Tweets total",
+                            cell = function(value){
+                                 width <- paste0(value*100 / max(subset$tweets), "%")
+                                 value <- format(value, width = 9, justify = "right")
+                                 bar_chart(value, width=width, fill = "#0D446F", background = "#e1e1e1")
+                               },
+                               align = "left",
+                              width = 180,
+                               style = list(fontFamily = "monospace", whiteSpace = "pre")),
+            recent_tweets = colDef(name = "Tweets letzte Woche",
+                                   cell = function(value){
+                                 width <- paste0(value*100 / max(subset$recent_tweets), "%")
+                                 value <- format(value, width = 5, justify = "right")
+                                 bar_chart(value, width=width, fill = "#12588E", background = "#e1e1e1")
+                               },
+                               align = "left",
+                               style = list(fontFamily = "monospace", whiteSpace = "pre")),
+            recent_likes = colDef(name = "Likes letzte Woche",
+                                  cell = function(value){
+                                 width <- paste0(value*100 / max(subset$recent_likes), "%")
+                                 value <- format(value, width = 5, justify = "right")
+                                 bar_chart(value, width=width, fill = "#1A7AC5", background = "#e1e1e1") #5B5A54
+                               },
+                               align = "left",
+                               style = list(fontFamily = "monospace", whiteSpace = "pre"))
+          ))
+r_srf
+```
+
+
+and save as html
+```{r}
+html_file_srf <- "table_srf.html"
+
+saveWidget(widget = r_srf, file = html_file_srf, selfcontained = TRUE)
+```
